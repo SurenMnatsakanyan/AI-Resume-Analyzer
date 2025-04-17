@@ -1,0 +1,30 @@
+
+# IDE settings
+.idea/
+*.iws
+*.ipr
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate
+*.tfstate.backup
+
+# Lambda zip files
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Java and Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+*.iml
+dependency-reduced-pom.xml
+
