@@ -1,22 +1,27 @@
 package org.example;
 
+import java.io.IOException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Base64;
+import java.util.Map;
+
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import okhttp3.*;
-
-import java.io.IOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import java.util.Map;
 
 public class ResumeAnalyzerHandler implements RequestHandler<Map<String, Object>, Map<String, Object>> {
 
@@ -112,7 +117,11 @@ public class ResumeAnalyzerHandler implements RequestHandler<Map<String, Object>
                 .path("text").asText();
 
             Map<String, Object> parsedResult = mapper.readValue(rawText, new TypeReference<>() {});
-            parsedResult.put("emailHash", key.split("/")[0]);
+            parsedResult.put("emailEncoded", key.split("/")[0]);
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashed  = digest.digest(fileBytes);
+            String resumeHashed = Base64.getUrlEncoder().encodeToString(hashed);
+            parsedResult.put("resumeHash", resumeHashed);
 
             context.getLogger().log("The score result is " + parsedResult.get("score"));
             context.getLogger().log("The recommendations result is " + parsedResult.get("recommendations"));

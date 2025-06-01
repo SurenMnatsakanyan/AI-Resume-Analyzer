@@ -1,4 +1,4 @@
-# Terraform Backend Module - Resume AI Processing (File Upload + Lambda + API Gateway)
+# Terraform Backend Module
 
 # --------------------------------------------
 # 1. Define AWS Provider
@@ -195,6 +195,31 @@ resource "aws_iam_role" "processing_lambda_exec" {
   })
 }
 
+resource "aws_iam_policy" "vpc_access_policy" {
+  name        = "LambdaVPCAccessPolicy"
+  description = "Permissions for Lambda to manage VPC networking (ENIs)"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DeleteNetworkInterface"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_vpc_access_attach" {
+  role       = aws_iam_role.processing_lambda_exec.name
+  policy_arn = aws_iam_policy.vpc_access_policy.arn
+}
+
 resource "aws_iam_role_policy_attachment" "processing_lambda_logs" {
   role       = aws_iam_role.processing_lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
@@ -210,7 +235,7 @@ resource "aws_iam_role_policy_attachment" "processing_lambda_dynamo" {
 # --------------------------------------------
 resource "aws_lambda_function" "recommendation-scoring-service" {
   function_name = "recommendation-scoring-service"
-  timeout       = 10
+  timeout       = 30
   memory_size   = 512
   filename         = "lambda/target/lambda-1.0-SNAPSHOT.jar"
   source_code_hash = filebase64sha256("lambda/target/lambda-1.0-SNAPSHOT.jar")
@@ -221,7 +246,14 @@ resource "aws_lambda_function" "recommendation-scoring-service" {
   environment {
     variables = {
       DYNAMO_TABLE_NAME = aws_dynamodb_table.resume_scores.name
+      REDIS_HOST     = aws_elasticache_cluster.redis.cache_nodes[0].address
+      REDIS_PORT     = "6379"
     }
+  }
+
+  vpc_config {
+    subnet_ids         = var.private_subnet_ids
+    security_group_ids = [aws_security_group.lambda_sg.id]
   }
 
   tags = {
@@ -244,6 +276,67 @@ resource "aws_dynamodb_table" "resume_scores" {
 
   tags = {
     Name = "ResumeScoresTable"
+  }
+}
+
+resource "aws_iam_role" "email_lambda_exec" {
+  name = "email_lambda_exec"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action    = "sts:AssumeRole",
+        Effect    = "Allow",
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "ses_send_email" {
+  name        = "AllowSESSendEmail"
+  description = "Allow Lambda to send email using SES"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "ses:SendEmail",
+          "ses:SendRawEmail"
+        ],
+        Resource = "*"  # You can scope this down to verified identities if you want
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "email_lambda_logs" {
+  role       = aws_iam_role.email_lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy_attachment" "email_lambda_ses" {
+  role       = aws_iam_role.email_lambda_exec.name
+  policy_arn = aws_iam_policy.ses_send_email.arn
+}
+
+resource "aws_lambda_function" "email_sender" {
+  function_name = "email-sender"
+  timeout       = 20
+  memory_size   = 256
+  filename         = "lambda/target/lambda-1.0-SNAPSHOT.jar"
+  source_code_hash = filebase64sha256("lambda/target/lambda-1.0-SNAPSHOT.jar")
+  runtime          = "java17"
+  handler          = "org.example.EmailSendingServiceHandler::handleRequest"
+  role             = aws_iam_role.email_lambda_exec.arn
+
+  tags = {
+    Name = "EmailSenderLambda"
   }
 }
 
@@ -298,11 +391,16 @@ resource "aws_sfn_state_machine" "resume_processor" {
         Resource = aws_lambda_function.resume_analyzer.arn,
         Next     = "RecommendationAndScoringService"
       },
-      RecommendationAndScoringService = {
-        Type     = "Task",
-        Resource = aws_lambda_function.recommendation-scoring-service.arn,
-        End = true
-      }
+       RecommendationAndScoringService = {
+         Type     = "Task",
+         Resource = aws_lambda_function.recommendation-scoring-service.arn,
+         Next     = "SendEmail"
+       },
+       SendEmail = {
+         Type     = "Task",
+         Resource = aws_lambda_function.email_sender.arn,
+         End      = true
+       }
     }
   })
 }
@@ -362,4 +460,54 @@ resource "aws_api_gateway_stage" "dev_stage" {
   stage_name    = "dev"
   rest_api_id   = aws_api_gateway_rest_api.resume_api.id
   deployment_id = aws_api_gateway_deployment.resume_api_deployment.id
+}
+
+resource "aws_security_group" "lambda_sg" {
+  name        = "lambda-sg"
+  description = "Security group for Lambda to access Redis"
+  vpc_id      = var.vpc_id
+
+  egress {
+    from_port   = 0 // Start of port range  any
+    to_port     = 0 // End of port range  any
+    protocol    = "-1" // This means all protocols
+    cidr_blocks = ["0.0.0.0/0"] // Any Ip address is OK
+  }
+}
+
+resource "aws_security_group" "redis_sg" {
+  name        = "redis-sg"
+  description = "Allow Lambda to access Redis"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    security_groups = [aws_security_group.lambda_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_elasticache_subnet_group" "redis_subnet_group" {
+  name       = "redis-subnet-group"
+  subnet_ids = var.private_subnet_ids
+}
+
+resource "aws_elasticache_cluster" "redis" {
+  cluster_id           = "resume-redis"
+  engine               = "redis"
+  engine_version       = "7.0"
+  node_type            = "cache.t2.micro"
+  num_cache_nodes      = 1
+  parameter_group_name = "default.redis7"
+  port                 = 6379
+  subnet_group_name    = aws_elasticache_subnet_group.redis_subnet_group.name
+  security_group_ids   = [aws_security_group.redis_sg.id]
 }
