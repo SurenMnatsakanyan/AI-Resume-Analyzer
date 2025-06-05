@@ -40,7 +40,8 @@ public class ResumeAnalyzerHandler implements RequestHandler<Map<String, Object>
 
             int startIndex = key.indexOf("/resume-") + 8;
             int lastIndex = key.indexOf(".pdf");
-            String position = key.substring(startIndex, lastIndex).replace("_", " ");
+            String positionSlug = key.substring(startIndex, lastIndex);
+            String position = positionSlug.replace("_", " ");
 
             context.getLogger().log("Analyzing resume for position: " + position + "\n");
 
@@ -122,6 +123,7 @@ public class ResumeAnalyzerHandler implements RequestHandler<Map<String, Object>
             byte[] hashed  = digest.digest(fileBytes);
             String resumeHashed = Base64.getUrlEncoder().encodeToString(hashed);
             parsedResult.put("resumeHash", resumeHashed);
+            parsedResult.put("position", positionSlug);
 
             context.getLogger().log("The score result is " + parsedResult.get("score"));
             context.getLogger().log("The recommendations result is " + parsedResult.get("recommendations"));

@@ -29,10 +29,12 @@ public class RecommendationScoringServiceHandler implements RequestHandler<Map<S
             String email = new String(Base64.getUrlDecoder().decode(encodedEmail), StandardCharsets.UTF_8);
             context.getLogger().log("Your email is " + email);
             String resumeHash = input.get("resumeHash").toString();
+            String positionSlug = input.get("position").toString();
             int score = (int) input.get("score");
             List<String> recommendations = (List<String>) input.get("recommendations");
 
-            String redisKey = "resume:" + resumeHash;
+            String redisKey = "resume:" + resumeHash + "position:" + positionSlug;
+            context.getLogger().log("Position Slug is " + positionSlug);
             String message = null;
             try (Jedis jedis = new Jedis(REDIS_HOST, REDIS_PORT)) {
                 if (jedis.exists(redisKey)) {
@@ -42,7 +44,7 @@ public class RecommendationScoringServiceHandler implements RequestHandler<Map<S
 
                 // Save to DynamoDB
                 Map<String, AttributeValue> item = new HashMap<>();
-                item.put("resumeId", AttributeValue.fromS(resumeHash));
+                item.put("resumeId", AttributeValue.fromS(encodedEmail));
                 item.put("score", AttributeValue.fromN(String.valueOf(score)));
                 item.put("recommendations", AttributeValue.fromL(
                     recommendations.stream().map(AttributeValue::fromS).toList()
@@ -75,8 +77,6 @@ public class RecommendationScoringServiceHandler implements RequestHandler<Map<S
                     Best of luck!
                     """, email, score, String.join("\n- ", recommendations));
                 context.getLogger().log("Finished caching the item");
-                context.getLogger().log("Finished SES sending");
-                context.getLogger().log("SES email sent to user: " + email);
             }
 
             return Map.of("status", "success", "email", email, "score", score, "message", message);

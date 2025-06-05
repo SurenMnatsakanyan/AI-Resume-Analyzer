@@ -56,6 +56,11 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_exec" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
+  role       = aws_iam_role.lambda_exec.name  # or file_service_lambda_exec if named differently
+  policy_arn = aws_iam_policy.vpc_access_policy.arn
+}
+
 # --------------------------------------------
 # 4. Lambda Function (Stub for Resume Upload)
 # --------------------------------------------
@@ -63,7 +68,7 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_exec" {
 resource "aws_lambda_function" "file_service" {
   depends_on = [aws_s3_bucket.resume_files]
   function_name = "file-service"
-  timeout = 10          # Increase from 3s to 10s
+  timeout = 30          # Increase from 3s to 10s
   memory_size = 512     # Boost from 128 MB to 512 MB
 
   filename         = "lambda/target/lambda-1.0-SNAPSHOT.jar"  # Path to your compiled JAR
@@ -77,7 +82,14 @@ resource "aws_lambda_function" "file_service" {
   environment {
     variables = {
       BUCKET_NAME = aws_s3_bucket.resume_files.id  # Environment variable for the S3 bucket
+      REDIS_HOST  = aws_elasticache_cluster.redis.cache_nodes[0].address
+      REDIS_PORT  = "6379"
     }
+  }
+
+  vpc_config {
+    subnet_ids         = var.private_subnet_ids
+    security_group_ids = [aws_security_group.lambda_sg.id]
   }
 
   tags = {
